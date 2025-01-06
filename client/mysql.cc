@@ -5533,7 +5533,7 @@ static const char *construct_prompt() {
   /* end prompt color */
   if(need_to_reset_color){   
     processed_prompt.append(RESET_PROMPT_COLOR_CODE);
-    processed_prompt.append(" ");
+    processed_prompt.append(" "); // Required at least 1 characters after RESET COLOR, so print space character after RESET COLOR CODE
   }
 
   processed_prompt.append('\0');
