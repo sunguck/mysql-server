@@ -1411,13 +1411,22 @@ int main(int argc, char *argv[]) {
 #endif
 
   /* initialize prompt color */
-  if(current_prompt_color_primary!=nullptr){
+  if(current_prompt_color_primary){
+    current_prompt_color_primary_code = get_ansi_color_code(current_prompt_color_primary);
+  }else{
+    current_prompt_color_primary = my_strdup(PSI_NOT_INSTRUMENTED, "magenta", MYF(MY_WME));
     current_prompt_color_primary_code = get_ansi_color_code(current_prompt_color_primary);
   }
-  if(current_prompt_color_replica!=nullptr){
+  if(current_prompt_color_replica){
+    current_prompt_color_replica_code = get_ansi_color_code(current_prompt_color_replica);
+  }else{
+    current_prompt_color_replica = my_strdup(PSI_NOT_INSTRUMENTED, "blue", MYF(MY_WME));
     current_prompt_color_replica_code = get_ansi_color_code(current_prompt_color_replica);
   }
-  if(current_error_color!=nullptr){
+  if(current_error_color){
+    current_error_color_code = get_ansi_color_code(current_error_color);
+  }else{
+    current_error_color = my_strdup(PSI_NOT_INSTRUMENTED, "red", MYF(MY_WME));
     current_error_color_code = get_ansi_color_code(current_error_color);
   }
 
