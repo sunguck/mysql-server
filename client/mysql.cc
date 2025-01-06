@@ -5687,7 +5687,7 @@ void warning_innodb_adaptive_hash_index(){
           unsigned long *lengths = mysql_fetch_lengths(result);
           if(lengths[1]>=2 && (var_value[0]=='O' || var_value[0]=='o') && (var_value[1]=='N' || var_value[1]=='n')){
             char message[MAX_CUSTOM_COMMAND_LEN2];
-            snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "\n******************************************************************************\n** %sWARNING%s                                                                  **\n******************************************************************************\n** %sConfigured \"innodb_adaptive_hash_index=ON\"%s                               **\n** %sBecareful when you run ALTER TABLE command%s                               **\n******************************************************************************\n", 
+            snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "******************************************************************************\n** %sWARNING%s                                                                 **\n******************************************************************************\n** %sConfigured \"innodb_adaptive_hash_index=ON\"%s                              **\n** %sBecareful when you run ALTER TABLE command%s                              **\n******************************************************************************\n",
                   (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */), RESET_PROMPT_COLOR_CODE,
                   (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */), RESET_PROMPT_COLOR_CODE,
                   (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */), RESET_PROMPT_COLOR_CODE);
