@@ -1,5 +1,7 @@
 # MySQL Rich Client
 
+---
+
 ## Command Line Interface Prompt Change
 ### Prompt for Aurora MySQL (`~/.my.cnf`)
 ```
@@ -29,6 +31,7 @@ prompt_color_replica=blue
 ![Primary prompt](./images/prompt-primary.png)
 ![Replica prompt](./images/prompt-replica.png)
 
+---
 
 ## Error Message Color
 `error_code_color` 는 별도로 설정되지 않으면, `red`로 초기 설정된다.
@@ -38,10 +41,13 @@ error_code_color=red
 ```
 ![Error Message Color](./images/error-color.png)
 
+---
+
 ## Warning for AdaptiveHashIndex
 MySQL 서버의 `innodb_adpative_hash_index` 시스템 변수가 `on`으로 설정되어 있는 경우, 로그인시에 경고 메시지 출력한다.
 ![Warning for InnoDB Adaptive Hash Index](./images/warning-innodb-adaptive-hash-index.png)
 
+---
 
 ## Run SQL File
 MySQL prompt에서 지정된 Prefix (`.`)를 사용하면, 등록된 단축 명령을 실행할 수 있다.
