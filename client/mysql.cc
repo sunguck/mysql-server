@@ -307,6 +307,9 @@ static char *current_prompt_color_primary = nullptr;
 static char *current_prompt_color_primary_code = nullptr;
 static char *current_prompt_color_replica = nullptr;
 static char *current_prompt_color_replica_code = nullptr;
+/* error color */
+static char *current_error_color = nullptr;
+static char *current_error_color_code = nullptr;
 
 /* reset prompt color */
 #define RESET_PROMPT_COLOR_CODE "\001\e[0m\002 "
@@ -1397,6 +1400,9 @@ int main(int argc, char *argv[]) {
   if(current_prompt_color_replica!=nullptr){
     current_prompt_color_replica_code = get_ansi_color_code(current_prompt_color_replica);
   }
+  if(current_error_color!=nullptr){
+    current_error_color_code = get_ansi_color_code(current_error_color);
+  }
 
   put_info("Welcome to the MySQL monitor.  Commands end with ; or \\g.",
            INFO_INFO);
@@ -1549,6 +1555,8 @@ void mysql_end(int sig) {
   if(current_prompt_color_primary_code!=nullptr) my_free(current_prompt_color_primary_code);
   if(current_prompt_color_replica!=nullptr) my_free(current_prompt_color_replica);
   if(current_prompt_color_replica_code!=nullptr) my_free(current_prompt_color_replica_code);
+  if(current_error_color!=nullptr) my_free(current_error_color);
+  if(current_error_color_code!=nullptr) my_free(current_error_color_code);
 
   my_free(current_prompt);
   mysql_server_end();
@@ -1867,6 +1875,9 @@ static struct my_option my_long_options[] = {
      0, 0, nullptr, 0, nullptr},
     {"prompt_color_replica", OPT_PROMPT_COLOR_REPLICA, "Set the replica mysql prompt color to this value.",
      &current_prompt_color_replica, &current_prompt_color_replica, nullptr, GET_STR, REQUIRED_ARG, 0,
+     0, 0, nullptr, 0, nullptr},
+    {"error_code_color", OPT_ERROR_CODE_COLOR, "Set the error message color to this value.",
+     &current_error_color, &current_error_color, nullptr, GET_STR, REQUIRED_ARG, 0,
      0, 0, nullptr, 0, nullptr},
     {"protocol", OPT_MYSQL_PROTOCOL,
      "The protocol to use for connection (tcp, socket, pipe, memory).", nullptr,
@@ -5086,9 +5097,9 @@ static int put_info(const char *str, INFO_TYPE info_type, uint error,
       if (!opt_nobeep) putchar('\a'); /* This should make a bell */
       if (error) {
         if (sqlstate)
-          (void)tee_fprintf(file, "ERROR %d (%s): ", error, sqlstate);
+          (void)tee_fprintf(file, "%sERROR %d (%s)%s: ", (current_error_color_code ? current_error_color_code:""), error, sqlstate, RESET_PROMPT_COLOR_CODE);
         else
-          (void)tee_fprintf(file, "ERROR %d: ", error);
+          (void)tee_fprintf(file, "%sERROR %d%s: ", (current_error_color_code ? current_error_color_code:""), error, RESET_PROMPT_COLOR_CODE);
       } else
         tee_puts("ERROR: ", file);
     }
