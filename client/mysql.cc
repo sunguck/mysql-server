@@ -315,7 +315,7 @@ static char *current_error_color = nullptr;
 static char *current_error_color_code = nullptr;
 
 /* reset prompt color */
-#define RESET_PROMPT_COLOR_CODE "\001\e[0m\002 "
+#define RESET_PROMPT_COLOR_CODE "\001\e[0m\002"
 
 /* Various printing flags */
 #define MY_PRINT_ESC_0 1 /* Replace 0x00 bytes to "\0"              */
@@ -2560,10 +2560,12 @@ static bool add_line(String &buffer, char *line, size_t line_length,
   char *end_of_line = line + line_length;
 
   // Only first character of first line is '.', then run com_custom_command()
-  if(*line=='.' && buffer.is_empty()){
+  char* tmp_line = line;
+  while(my_isspace(charset_info, *tmp_line)) tmp_line++; // consume space & tab characters
+  if(*tmp_line=='.' && buffer.is_empty()/* if(very-first-line) */){
     /* com_custom_command() use different prefix ('.' not '\\'), so can not use find_command()*/
     com = &commands[CUSTOM_COMMAND_IDX];
-    (*com->func)(&buffer, line);
+    (*com->func)(&buffer, tmp_line);
     return false; // Never Quit
   }
 
@@ -5531,8 +5533,6 @@ static const char *construct_prompt() {
   /* end prompt color */
   if(need_to_reset_color){   
     processed_prompt.append(RESET_PROMPT_COLOR_CODE);
-  }else{
-    /* RESET_PROMPT_COLOR_CODE has trailing space, so need to append single space when reset color is skipped */
     processed_prompt.append(" ");
   }
 
