@@ -5988,7 +5988,7 @@ static int com_custom_command(String *buffer MY_ATTRIBUTE((unused)), char *line)
 
   char* custom_command = nullptr;
   int arguments_in_cmdline=0;
-  char* arguments[MAX_CUSTOM_COMMAND_VARS];
+  char* arguments[MAX_CUSTOM_COMMAND_VARS] = {NULL, NULL, NULL, NULL, NULL};
 
   int delimiter_type = 0; // 0:none, 1(;):horizontal, 2(\G):vertical
   char* cmd_line = my_strdup(PSI_NOT_INSTRUMENTED, line, MYF(MY_WME));
