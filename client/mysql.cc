@@ -1581,11 +1581,8 @@ void mysql_end(int sig) {
   if(remote_real_hostname!=nullptr) my_free(remote_real_hostname);
   if(remote_real_replrole!=nullptr) my_free(remote_real_replrole);
   if(remote_real_region!=nullptr) my_free(remote_real_region);
-  if(current_prompt_color_primary!=nullptr) my_free(current_prompt_color_primary);
   if(current_prompt_color_primary_code!=nullptr) my_free(current_prompt_color_primary_code);
-  if(current_prompt_color_replica!=nullptr) my_free(current_prompt_color_replica);
   if(current_prompt_color_replica_code!=nullptr) my_free(current_prompt_color_replica_code);
-  if(current_error_color!=nullptr) my_free(current_error_color);
   if(current_error_color_code!=nullptr) my_free(current_error_color_code);
 
   my_free(current_prompt);
