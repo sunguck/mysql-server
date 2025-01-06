@@ -37,6 +37,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
 #include <stdlib.h>
 #include <sys/types.h>
 #include <time.h>
+#include <fstream>
+#include <iostream>
+#include <cstdio>
+#include <dirent.h>
 
 #include "client/client_priv.h"
 #include "client/client_query_attributes.h"
@@ -289,6 +293,23 @@ static inline bool my_win_is_console_cached(FILE *file) {
   return win_is_console_cache & (1 << _fileno(file));
 }
 #endif /* _WIN32 */
+
+/* aurora version (nullptr if not a aurora) */
+static char *remote_aurora_version = nullptr;
+/* real hostname when using proxy */
+static char *remote_real_hostname = nullptr;
+/* real replication role */
+static char *remote_real_replrole = nullptr;
+/* real region name */
+static char *remote_real_region = nullptr;
+/* prompt color */
+static char *current_prompt_color_primary = nullptr;
+static char *current_prompt_color_primary_code = nullptr;
+static char *current_prompt_color_replica = nullptr;
+static char *current_prompt_color_replica_code = nullptr;
+
+/* reset prompt color */
+#define RESET_PROMPT_COLOR_CODE "\001\e[0m\002 "
 
 /* Various printing flags */
 #define MY_PRINT_ESC_0 1 /* Replace 0x00 bytes to "\0"              */
@@ -1197,6 +1218,10 @@ extern "C" void handle_quit_signal(int sig);
 static void window_resize(int);
 #endif
 
+char* get_ansi_color_code(char* color_name);
+void resolve_aurora_version();
+void resolve_aurora_hostname_and_role();
+
 const char DELIMITER_NAME[] = "delimiter";
 const uint DELIMITER_NAME_LEN = sizeof(DELIMITER_NAME) - 1;
 inline bool is_delimiter_command(char *name, ulong len) {
@@ -1365,6 +1390,14 @@ int main(int argc, char *argv[]) {
   window_resize(0);
 #endif
 
+  /* initialize prompt color */
+  if(current_prompt_color_primary!=nullptr){
+    current_prompt_color_primary_code = get_ansi_color_code(current_prompt_color_primary);
+  }
+  if(current_prompt_color_replica!=nullptr){
+    current_prompt_color_replica_code = get_ansi_color_code(current_prompt_color_replica);
+  }
+
   put_info("Welcome to the MySQL monitor.  Commands end with ; or \\g.",
            INFO_INFO);
   snprintf(glob_buffer.ptr(), glob_buffer.alloced_length(),
@@ -1507,6 +1540,16 @@ void mysql_end(int sig) {
 #if defined(_WIN32)
   my_free(shared_memory_base_name);
 #endif
+
+  if(remote_aurora_version!=nullptr) my_free(remote_aurora_version);
+  if(remote_real_hostname!=nullptr) my_free(remote_real_hostname);
+  if(remote_real_replrole!=nullptr) my_free(remote_real_replrole);
+  if(remote_real_region!=nullptr) my_free(remote_real_region);
+  if(current_prompt_color_primary!=nullptr) my_free(current_prompt_color_primary);
+  if(current_prompt_color_primary_code!=nullptr) my_free(current_prompt_color_primary_code);
+  if(current_prompt_color_replica!=nullptr) my_free(current_prompt_color_replica);
+  if(current_prompt_color_replica_code!=nullptr) my_free(current_prompt_color_replica_code);
+
   my_free(current_prompt);
   mysql_server_end();
   my_end(my_end_arg);
@@ -1818,6 +1861,12 @@ static struct my_option my_long_options[] = {
      nullptr, 0, nullptr},
     {"prompt", OPT_PROMPT, "Set the mysql prompt to this value.",
      &current_prompt, &current_prompt, nullptr, GET_STR_ALLOC, REQUIRED_ARG, 0,
+     0, 0, nullptr, 0, nullptr},
+    {"prompt_color_primary", OPT_PROMPT_COLOR_PRIMARY, "Set the primary mysql prompt color to this value.",
+     &current_prompt_color_primary, &current_prompt_color_primary, nullptr, GET_STR, REQUIRED_ARG, 0,
+     0, 0, nullptr, 0, nullptr},
+    {"prompt_color_replica", OPT_PROMPT_COLOR_REPLICA, "Set the replica mysql prompt color to this value.",
+     &current_prompt_color_replica, &current_prompt_color_replica, nullptr, GET_STR, REQUIRED_ARG, 0,
      0, 0, nullptr, 0, nullptr},
     {"protocol", OPT_MYSQL_PROTOCOL,
      "The protocol to use for connection (tcp, socket, pipe, memory).", nullptr,
@@ -4687,6 +4736,16 @@ static int sql_real_connect(char *host, char *database, char *user, char *,
 
   connected = true;
   mysql.reconnect = debug_info_flag;  // We want to know if this happens
+
+  /* resolve aurora version (if remote server is aurora, if not remote_aurora_version will be set as nullptr */
+  resolve_aurora_version();
+  if(remote_aurora_version!=nullptr){
+    /* resolve aurora hostname and replication role via SQL */
+    resolve_aurora_hostname_and_role();
+  }else{
+    /* just ignore for non-Aurora MySQL server */
+  }
+
 #ifdef HAVE_READLINE
   build_completion_hash(opt_rehash, true);
 #endif
@@ -5245,6 +5304,20 @@ static const char *construct_prompt() {
   time_t lclock = time(nullptr);  // Get the date struct
   struct tm *t = localtime(&lclock);
 
+  /* start prompt color */
+  bool need_to_reset_color = false;
+  if(remote_real_replrole!=nullptr){
+    if(strcmp(remote_real_replrole, "Primary")==0){
+      if(current_prompt_color_primary_code!=nullptr){
+        processed_prompt.append(current_prompt_color_primary_code);
+        need_to_reset_color = true;
+      }
+    }else if(current_prompt_color_replica_code!=nullptr){
+      processed_prompt.append(current_prompt_color_replica_code);
+      need_to_reset_color = true;
+    }
+  }
+
   /* parse thru the settings for the prompt */
   for (char *c = current_prompt; *c; c++) {
     if (*c != PROMPT_CHAR)
@@ -5382,11 +5455,41 @@ static const char *construct_prompt() {
           if (mysql.server_status & SERVER_STATUS_IN_TRANS)
             processed_prompt.append("*");
           break;
+        case 'X': /* must not be used in original mysql client */
+          if(remote_real_hostname!=nullptr){
+            processed_prompt.append(remote_real_hostname);
+	    if(remote_real_region!=nullptr){
+              processed_prompt.append(remote_real_region);
+	    }
+	  }else{
+            const char *prompt;
+            prompt = connected ? mysql_get_host_info(&mysql) : "not_connected";
+            if (strstr(prompt, "Localhost"))
+              processed_prompt.append("localhost");
+            else {
+              const char *end = strcend(prompt, ' ');
+              processed_prompt.append(prompt, (uint)(end - prompt));
+            }
+          }
+          break;
+        case 'Z': /* must not be used in original mysql client */
+          if(remote_real_replrole!=nullptr)
+            processed_prompt.append(remote_real_replrole);
+          break;
         default:
           processed_prompt.append(c);
       }
     }
   }
+
+  /* end prompt color */
+  if(need_to_reset_color){   
+    processed_prompt.append(RESET_PROMPT_COLOR_CODE);
+  }else{
+    /* RESET_PROMPT_COLOR_CODE has trailing space, so need to append single space when reset color is skipped */
+    processed_prompt.append(" ");
+  }
+
   processed_prompt.append('\0');
   return processed_prompt.ptr();
 }
@@ -5479,4 +5582,84 @@ static int com_resetconnection(String *buffer [[maybe_unused]],
     return put_error(&mysql);
   }
   return error;
+}
+
+char* get_ansi_color_code(char* color_name){
+  if(color_name!=nullptr){
+    if(strcmp(color_name, "black")==0)
+      return my_strdup(PSI_NOT_INSTRUMENTED, "\001\e[0;30;1m\002", MYF(MY_WME));
+    else if(strcmp(color_name, "red")==0)
+      return my_strdup(PSI_NOT_INSTRUMENTED, "\001\e[0;31;1m\002", MYF(MY_WME));
+    else if(strcmp(color_name, "green")==0)
+      return my_strdup(PSI_NOT_INSTRUMENTED, "\001\e[0;32;1m\002", MYF(MY_WME));
+    else if(strcmp(color_name, "yellow")==0)
+      return my_strdup(PSI_NOT_INSTRUMENTED, "\001\e[0;33;1m\002", MYF(MY_WME));
+    else if(strcmp(color_name, "blue")==0)
+      return my_strdup(PSI_NOT_INSTRUMENTED, "\001\e[0;34;1m\002", MYF(MY_WME));
+    else if(strcmp(color_name, "magenta")==0)
+      return my_strdup(PSI_NOT_INSTRUMENTED, "\001\e[0;35;1m\002", MYF(MY_WME));
+    else if(strcmp(color_name, "cyan")==0)
+      return my_strdup(PSI_NOT_INSTRUMENTED, "\001\e[0;36;1m\002", MYF(MY_WME));
+    else if(strcmp(color_name, "white")==0)
+      return my_strdup(PSI_NOT_INSTRUMENTED, "\001\e[0;37;1m\002", MYF(MY_WME));
+  }
+  /* read as default*/
+  return my_strdup(PSI_NOT_INSTRUMENTED, "\001\e[0;31;1m\002", MYF(MY_WME));
+}
+
+void resolve_aurora_version(){
+  MYSQL_RES *rs = nullptr;
+  MYSQL_ROW row;
+  if(!connected && reconnect()){
+    return;
+  }
+  if(mysql_query(&mysql, "SHOW VARIABLES LIKE '%version'") == 0){
+    if((rs = mysql_store_result(&mysql))){
+      while((row = mysql_fetch_row(rs))){
+        if(row && row[0] && (strcmp(row[0], "aurora_version")==0)){
+          remote_aurora_version = my_strdup(PSI_NOT_INSTRUMENTED, row[1], MYF(MY_WME));
+          break;
+        }
+      }
+      mysql_free_result(rs);
+    }
+  }
+}
+
+void resolve_aurora_hostname_and_role(){
+  MYSQL_RES *rs = nullptr;
+  MYSQL_ROW row;
+  if(!connected && reconnect()){
+    remote_real_hostname = my_strdup(PSI_NOT_INSTRUMENTED, "NotConnected", MYF(MY_WME));
+    remote_real_replrole = my_strdup(PSI_NOT_INSTRUMENTED, "NotConnected", MYF(MY_WME));
+  }else if(mysql_query(&mysql,
+       "SELECT server_id, IF(session_id='MASTER_SESSION_ID','Primary', 'Replica') as server_role FROM information_schema.replica_host_status WHERE server_id=@@aurora_server_id") == 0){
+    if((rs = mysql_store_result(&mysql))){
+      if((row = mysql_fetch_row(rs))){
+        remote_real_hostname = my_strdup(PSI_NOT_INSTRUMENTED, row[0], MYF(MY_WME));
+        remote_real_replrole = my_strdup(PSI_NOT_INSTRUMENTED, row[1], MYF(MY_WME));
+      }
+      mysql_free_result(rs);
+    }
+
+    const char *host_info = mysql_get_host_info(&mysql);
+    if(strstr(host_info, "ap-northeast-2")){
+      remote_real_region = my_strdup(PSI_NOT_INSTRUMENTED, ".KR", MYF(MY_WME));
+    }else if(strstr(host_info, "ap-northeast-1")){
+      remote_real_region = my_strdup(PSI_NOT_INSTRUMENTED, ".JP", MYF(MY_WME));
+    }else if(strstr(host_info, "ca-central-1")){
+      remote_real_region = my_strdup(PSI_NOT_INSTRUMENTED, ".CA", MYF(MY_WME));
+    }else if(strstr(host_info, "eu-west-2")){
+      remote_real_region = my_strdup(PSI_NOT_INSTRUMENTED, ".UK", MYF(MY_WME));
+    }else{
+      remote_real_region = my_strdup(PSI_NOT_INSTRUMENTED, ".UNKNOWN", MYF(MY_WME));
+    }
+
+    if(remote_real_hostname==nullptr){
+      remote_real_replrole = my_strdup(PSI_NOT_INSTRUMENTED, "unknonw-role", MYF(MY_WME));
+    }
+  }else{
+    remote_real_hostname = nullptr;
+    remote_real_replrole = my_strdup(PSI_NOT_INSTRUMENTED, "unknown-role", MYF(MY_WME));
+  }
 }
