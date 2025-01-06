@@ -294,6 +294,9 @@ static inline bool my_win_is_console_cached(FILE *file) {
 }
 #endif /* _WIN32 */
 
+/* extra script directory */
+static char *script_dir = nullptr;
+
 /* aurora version (nullptr if not a aurora) */
 static char *remote_aurora_version = nullptr;
 /* real hostname when using proxy */
@@ -343,6 +346,7 @@ static int com_quit(String *str, char *), com_go(String *str, char *),
     com_prompt(String *str, char *), com_delimiter(String *str, char *),
     com_warnings(String *str, char *), com_nowarnings(String *str, char *),
     com_resetconnection(String *str, char *),
+    com_custom_command(String *str, char *),
     com_query_attributes(String *str, char *),
     com_ssl_session_data_print(String *str, char *);
 static int com_shell(String *str, char *);
@@ -394,8 +398,10 @@ typedef struct {
   const char *doc;                  /* Documentation for this function.  */
 } COMMANDS;
 
+int CUSTOM_COMMAND_IDX=1; /* static index, com_custom_command() need to be placed at 2nd position in COMMANDS array */
 static COMMANDS commands[] = {
     {"?", '?', com_help, true, "Synonym for `help'."},
+    {".", '.', com_custom_command, true, "Run custom command."}, /* need to be placed at 2nd position in COMMANDS array */
     {"clear", 'c', com_clear, false, "Clear the current input statement."},
     {"connect", 'r', com_connect, true,
      "Reconnect to the server. Optional arguments are db and host."},
@@ -1295,6 +1301,15 @@ int main(int argc, char *argv[]) {
   current_prompt = my_strdup(PSI_NOT_INSTRUMENTED, default_prompt, MYF(MY_WME));
   prompt_counter = 0;
 
+  /* prepare custom script directory */
+  if(getenv("MYSQL_SCRIPTDIR")){
+    script_dir = my_strdup(PSI_NOT_INSTRUMENTED, getenv("MYSQL_SCRIPTDIR"), MYF(MY_WME));
+  }else if(getenv("HOME")){
+    char temp_path[512+1];
+    snprintf(temp_path, 512, "%s/%s", getenv("HOME"), ".mysqlrc");
+    script_dir = my_strdup(PSI_NOT_INSTRUMENTED, temp_path, MYF(MY_WME));
+  }
+
   outfile[0] = 0;              // no (default) outfile
   my_stpcpy(pager, "stdout");  // the default, if --pager wasn't given
   {
@@ -1547,6 +1562,7 @@ void mysql_end(int sig) {
   my_free(shared_memory_base_name);
 #endif
 
+  if(script_dir!=nullptr) my_free(script_dir);
   if(remote_aurora_version!=nullptr) my_free(remote_aurora_version);
   if(remote_real_hostname!=nullptr) my_free(remote_real_hostname);
   if(remote_real_replrole!=nullptr) my_free(remote_real_replrole);
@@ -2531,6 +2547,14 @@ static bool add_line(String &buffer, char *line, size_t line_length,
   if (status.add_to_history && line[0]) add_filtered_history(line);
 
   char *end_of_line = line + line_length;
+
+  // Only first character of first line is '.', then run com_custom_command()
+  if(*line=='.' && buffer.is_empty()){
+    /* com_custom_command() use different prefix ('.' not '\\'), so can not use find_command()*/
+    com = &commands[CUSTOM_COMMAND_IDX];
+    (*com->func)(&buffer, line);
+    return false; // Never Quit
+  }
 
   for (pos = out = line; pos < end_of_line; pos++) {
     inchar = (uchar)*pos;
@@ -5673,4 +5697,366 @@ void resolve_aurora_hostname_and_role(){
     remote_real_hostname = nullptr;
     remote_real_replrole = my_strdup(PSI_NOT_INSTRUMENTED, "unknown-role", MYF(MY_WME));
   }
+}
+
+#define MAX_CUSTOM_COMMAND_VAR_LEN 1000
+#define MAX_CUSTOM_COMMAND_LEN     2000
+#define MAX_CUSTOM_COMMAND_LEN2    2000*2
+
+#define MAX_CUSTOM_COMMAND_VARS 5
+
+/**
+ * Remove trailing space & determine delimiter type
+ * RETURN : 0 : No delimiter
+ *          1 : Horizontal delimiter (;)
+ *          2 : Vertical delimiter (\G)
+ */
+int normalize_custom_command(char* str, int len){
+  char* end = str + len - 1;
+  /* sometimes, ifstream.gcount() tell bigger than real string length, so remove trailing space character */
+  while(end>str && (*end=='\0' || my_isspace(charset_info, *end))){
+    *end = '\0';
+    end--;
+  }
+
+  if(*end==';'){
+    return 1; // horizontal
+  }else if(*end=='G' && --end>=str && *end=='\\'){
+    *end++ = ';';
+    *end = '\0';
+    return 2; // vertical
+  }
+  return 0; // No delimiter
+}
+
+/**
+ * Bind variables
+ *
+ * #{VAR} : SYSTEM VARIABLES
+ * ${VAR} : USER VARIABLES
+ *
+ * Arguments
+ *   - buffer[in|out] : input query string
+ *   - buffer_len[in] : buffer length of "buffer" argument
+ *   - argument[in] : argument for first variable in "buffer"
+ *   - arguments_used[in|out] : used arguments count
+ */
+int bind_variables(char* buffer, int buffer_len, char** arguments, int* arguments_used){
+  bool error = 0;
+  char* source = nullptr;
+
+  char* source_start_ptr = nullptr;
+  char* source_end_ptr = nullptr;
+  char* dest_ptr = buffer;
+
+  // Short circuit check
+  if(strstr(buffer, "#{")==NULL && strstr(buffer, "${")==NULL){
+    goto stop; // Do nothing
+  }
+
+  char var_name[MAX_CUSTOM_COMMAND_VAR_LEN];
+  char readline_prompt[MAX_CUSTOM_COMMAND_LEN2];
+  source = my_strdup(PSI_NOT_INSTRUMENTED, buffer, MYF(MY_WME));
+  memset(buffer, 0, buffer_len);
+  source_start_ptr = source_end_ptr = source;
+
+  while(true){
+    bool is_system_var = false;
+    char* sys_end_ptr = strstr(source_start_ptr, "#{");
+    char* user_end_ptr = strstr(source_start_ptr, "${");
+
+    if(sys_end_ptr!=NULL && user_end_ptr!=NULL){
+      if(sys_end_ptr>user_end_ptr){ // User variable first
+        is_system_var = false;
+        source_end_ptr = user_end_ptr;
+      }else if(user_end_ptr>sys_end_ptr){ // System variable first
+        is_system_var = true;
+        source_end_ptr = sys_end_ptr;
+      }
+    }else if(sys_end_ptr!=NULL){
+      is_system_var = true;
+      source_end_ptr = sys_end_ptr;
+    }else if(user_end_ptr!=NULL){
+      is_system_var = false;
+      source_end_ptr = user_end_ptr;
+    }else{
+      break;
+    }
+
+    while(source_start_ptr<source_end_ptr && dest_ptr<(buffer+MAX_CUSTOM_COMMAND_LEN2)){
+      *dest_ptr++=*source_start_ptr++;
+    }
+    *dest_ptr='\0';
+    source_start_ptr += 2; // Skip "#{" or "${"
+    char* var_end_ptr = strstr(source_start_ptr, "}");
+    if(!var_end_ptr){
+      error = 9; // Variable end-mark not found
+      goto stop;
+    }
+
+    // Copy variable name
+    char* tmp_var_name = var_name;
+    while(source_start_ptr<var_end_ptr && tmp_var_name<(var_name+MAX_CUSTOM_COMMAND_VAR_LEN-1)) *tmp_var_name++=*source_start_ptr++;
+    *tmp_var_name='\0';
+    source_start_ptr += 1; // Skip "}" 
+
+    char* var_value = nullptr;
+    char* prompt_value = nullptr;
+    if(is_system_var){ // Binding system variables (only support CURRENT_DB, CURRENT_USER, CURRENT_HOST)
+      if(!strcasecmp(var_name, "CURRENT_DB")) var_value = current_db;
+      else if(!strcasecmp(var_name, "CURRENT_USER")) var_value = current_user;
+      else if(!strcasecmp(var_name, "CURRENT_HOST")) var_value = current_host;
+    }else{
+      if(*arguments_used<MAX_CUSTOM_COMMAND_VARS && arguments[*arguments_used] && strlen(arguments[*arguments_used])>0){
+        var_value = arguments[*arguments_used];
+        *arguments_used+=1;
+        snprintf(readline_prompt, MAX_CUSTOM_COMMAND_LEN2, "      -> VARIABLE #{%.200s}: %s", var_name, var_value);
+        put_info(readline_prompt, INFO_INFO);
+      }else{
+        snprintf(readline_prompt, MAX_CUSTOM_COMMAND_LEN2, "      -> VARIABLE #{%.200s}: ", var_name);
+        prompt_value = readline(readline_prompt);
+        // Store read input value to arguments ARRAY. Need to be freed later
+        arguments[*arguments_used] = prompt_value;
+        *arguments_used+=1;
+        var_value = prompt_value;
+      }
+    }
+
+    if(var_value){ // var_value can be NULL for non-mapped system variables)
+      // Check buffer overflow
+      if( (dest_ptr + (int)strlen(var_value)) >= (buffer + buffer_len) ){
+        error = 1;
+        goto stop;
+      }
+
+      /* Copy binding value into sql line */
+      char* tmp_var_value_ptr = var_value;
+      while(*tmp_var_value_ptr) *dest_ptr++ = *tmp_var_value_ptr++;
+    }
+  }
+
+  // Copy remain strings
+  while(*source_start_ptr && (dest_ptr<(buffer+buffer_len))){
+    *dest_ptr++ = *source_start_ptr++;
+  }
+  *dest_ptr = '\0';
+
+stop:
+  if(source) my_free(source);
+  return error;
+}
+
+void help_custom_command(char* filter/* for help message filtering */){
+  DIR *dir;
+  struct dirent *ent;
+  char script_path[MAX_CUSTOM_COMMAND_VAR_LEN];
+  char message[MAX_CUSTOM_COMMAND_LEN2];
+  int max_command_len = 0;
+
+  std::vector <std::string> commands;
+  if((dir = opendir(script_dir)) != NULL) {
+    /* print all the files and directories within directory */
+    while ((ent = readdir(dir)) != NULL) {
+      char* ext = strrchr(ent->d_name, '.');
+      if(ext!=NULL && !strcmp(ext, ".sql")){
+        int len = strlen(ent->d_name) - 4;
+        if(len>max_command_len) max_command_len = len;
+	commands.push_back( std::string( ent->d_name ) );
+      }
+    }
+    std::sort( commands.begin(), commands.end() );
+  }else{
+    snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "    => ERROR : Script directory not found : %s", script_dir);
+    put_info(message, INFO_INFO);
+    return;
+  }
+
+  if(max_command_len==0){ // No custom command
+    put_info("    => No custom command found", INFO_INFO);
+    return;
+  }
+
+  put_info("    ----------------------------------------------", INFO_INFO); 
+
+  int total_commands = 0;
+  char help_format[100];
+  snprintf(help_format, 100, "        => %s-%d%s : %s", "%", max_command_len, "s", "%s");
+  char comment[MAX_CUSTOM_COMMAND_LEN];
+  for(auto command : commands){
+        command = command.substr(0, command.find_last_of("."));
+        std::ifstream script_file;
+        snprintf(script_path, MAX_CUSTOM_COMMAND_VAR_LEN, "%s/%s.sql", script_dir, command.c_str());
+
+        script_file.open(script_path);
+        if(script_file.is_open()){
+          int read_bytes = 0;
+          if(!script_file.eof()){ // Read only first line (It's supposed to be command help message)
+            memset(comment, 0, MAX_CUSTOM_COMMAND_LEN);
+            script_file.getline(comment, MAX_CUSTOM_COMMAND_LEN);
+            read_bytes = script_file.gcount();
+
+            // Filter command if filter option is provided
+            if(filter!=NULL && filter[0]!='\0'){
+              if(read_bytes<=0 || !strcasestr(comment, filter)){
+                continue;
+              }
+            }
+
+            total_commands++;
+            if(read_bytes<=0){
+              snprintf(message, MAX_CUSTOM_COMMAND_LEN2, help_format, command.c_str(), "No command help");
+            }else{
+              snprintf(message, MAX_CUSTOM_COMMAND_LEN2, help_format, command.c_str(), comment);
+            }
+            put_info(message, INFO_INFO);
+          }
+          script_file.close();
+        }else{
+          snprintf(message, MAX_CUSTOM_COMMAND_LEN2, help_format, command.c_str(), "Failed to open file");
+          put_info(message, INFO_INFO);
+        }
+  }
+  put_info("    ----------------------------------------------", INFO_INFO); 
+
+  if(filter!=NULL && filter[0]!='\0'){
+    snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "    => %d custom commands found (filtered : %s)", total_commands, filter);
+  }else{
+    snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "    => %d custom commands found", total_commands);
+  }
+  put_info(message, INFO_INFO); 
+}
+
+
+#define CUSTOM_COMMAND_TOKEN_DELIMITERS " \t"
+static int com_custom_command(String *buffer MY_ATTRIBUTE((unused)), char *line) {
+  int len = (line==NULL || *line=='\0') ? 0 : strlen(line);
+  if(len<=0){
+    return 0; // Do nothing
+  }
+
+  char* custom_command = nullptr;
+  int arguments_in_cmdline=0;
+  char* arguments[MAX_CUSTOM_COMMAND_VARS];
+
+  int delimiter_type = 0; // 0:none, 1(;):horizontal, 2(\G):vertical
+  char* cmd_line = my_strdup(PSI_NOT_INSTRUMENTED, line, MYF(MY_WME));
+  char* tmp_cmd_line = nullptr;
+  char* token = nullptr;
+  token = strtok_r(cmd_line, CUSTOM_COMMAND_TOKEN_DELIMITERS, &tmp_cmd_line);
+  if(token && (!strcasecmp(".", token) || !strcasecmp(".?", token))){
+    // Print short-cut command usage
+    token = strtok_r(NULL, CUSTOM_COMMAND_TOKEN_DELIMITERS, &tmp_cmd_line);
+    help_custom_command(token);
+    goto stop;
+  }
+
+  char message[MAX_CUSTOM_COMMAND_LEN2];
+
+  // 1. Parse custom command
+  if(token==NULL || strlen(token)<2 || token[0]!='.'){
+    snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "    => Unknown command '%s'", token);
+    put_info(message, INFO_INFO);
+    goto stop;
+  }
+  custom_command = token+1; // Shift short-cut command prefix "."
+
+  // 2. Read arguments
+  for(int idx=0; idx<MAX_CUSTOM_COMMAND_VARS; idx++){
+    arguments[idx] = strtok_r(NULL, CUSTOM_COMMAND_TOKEN_DELIMITERS, &tmp_cmd_line);
+    if(arguments[idx]) arguments_in_cmdline++;
+  }
+
+  // Debug printing
+  snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "  => Command=[%s], Arg1=[%s] Arg2=[%s] Arg3=[%s] Arg4=[%s] Arg5=[%s]", custom_command, 
+          (arguments[0]==nullptr ? "" : arguments[0]), (arguments[1]==nullptr ? "" : arguments[1]), 
+          (arguments[2]==nullptr ? "" : arguments[2]), (arguments[3]==nullptr ? "" : arguments[3]), 
+          (arguments[4]==nullptr ? "" : arguments[4]));
+  put_info(message, INFO_INFO);
+
+  // 4. Run command
+  if(strlen(custom_command)>0){
+    char script_path[MAX_CUSTOM_COMMAND_VAR_LEN];
+    snprintf(script_path, MAX_CUSTOM_COMMAND_VAR_LEN, "%s/%s.sql", script_dir, custom_command);
+
+    std::ifstream script_file;
+    script_file.open(script_path);
+    if(script_file.is_open() == false){
+      snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "    => ERROR : Script file not found : %s", script_path);
+      put_info(message, INFO_INFO);
+      goto stop;
+    }
+
+    int line_no = 0;
+    int read_bytes = 0;
+    char line_buffer[MAX_CUSTOM_COMMAND_LEN2];
+    int arguments_used=0;
+    while(!script_file.eof()){
+      memset(line_buffer, 0, MAX_CUSTOM_COMMAND_LEN2);
+      /* read only MAX_CUSTOM_COMMAND_LEN (not MAX_CUSTOM_COMMAND_LEN2), MAX_CUSTOM_COMMAND_LEN2 is for after variable value binded */
+      script_file.getline(line_buffer, MAX_CUSTOM_COMMAND_LEN-1);
+      read_bytes = script_file.gcount();
+      if(read_bytes<=0) continue; // First line is help comment (so ignore)
+      if(line_no==0){// First line is help comment (so ignore)
+        line_no++;
+        continue;
+      }
+
+      delimiter_type = normalize_custom_command(line_buffer, read_bytes);
+      int rtn = bind_variables(line_buffer, MAX_CUSTOM_COMMAND_LEN2, arguments, &arguments_used);
+      if(rtn){
+        glob_buffer.length(0);
+        snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "    => ERROR : Failed to bind variable value");
+        put_info(message, INFO_INFO);
+        goto stop;
+      }
+
+      // Debug printing
+      snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "    => %s", line_buffer);
+      put_info(message, INFO_INFO);
+
+      if(glob_buffer.length()>0){
+        glob_buffer.append(STRING_WITH_LEN("\n"));
+      }
+      glob_buffer.append(line_buffer, strlen(line_buffer));
+      line_no++;
+    }
+
+    if(!delimiter_type){
+      glob_buffer.append(STRING_WITH_LEN(";"));
+    }
+    script_file.close();
+
+    // OK
+    int rtn=0;
+    if(glob_buffer.length()>0){
+      if(delimiter_type==2) // vertical
+        rtn = com_ego(&glob_buffer, nullptr);
+      else
+        rtn = com_go(&glob_buffer, nullptr);
+    }
+    // Need special care for change database
+    if(!rtn && !strcmp("c", custom_command)){
+      if(current_db) my_free(current_db);
+      current_db = my_strdup(PSI_NOT_INSTRUMENTED, arguments[0], MYF(MY_WME));
+      uint warnings;
+      if (0 < (warnings = mysql_warning_count(&mysql))) {
+        snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "Database changed, %u warning%s", warnings, warnings > 1 ? "s" : "");
+        put_info(message, INFO_INFO);
+        if (show_warnings == 1) print_warnings();
+      }else{
+        put_info("Database changed", INFO_INFO);
+      }
+    }
+    goto stop;
+  }
+
+  snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "    => ERROR : Required custom command name");
+  put_info(message, INFO_INFO);
+
+stop:
+  if(cmd_line) my_free(cmd_line);
+  for(int idx=arguments_in_cmdline; idx<MAX_CUSTOM_COMMAND_VARS; idx++){
+    if(arguments[idx]) free(arguments[idx]); // free() when argument is readed by readline(), not commandline buffer
+  }
+  return 0; // Never Failed
 }
