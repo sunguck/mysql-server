@@ -1231,6 +1231,8 @@ char* get_ansi_color_code(char* color_name);
 void resolve_aurora_version();
 void resolve_aurora_hostname_and_role();
 
+void warning_innodb_adaptive_hash_index();
+
 const char DELIMITER_NAME[] = "delimiter";
 const uint DELIMITER_NAME_LEN = sizeof(DELIMITER_NAME) - 1;
 inline bool is_delimiter_command(char *name, ulong len) {
@@ -1484,6 +1486,9 @@ int main(int argc, char *argv[]) {
     }
 #endif
   }
+
+  /* check innodb adaptive hash index warning */
+  warning_innodb_adaptive_hash_index();
 
   sprintf(
       buff, "%s",
@@ -5619,6 +5624,17 @@ static int com_resetconnection(String *buffer [[maybe_unused]],
   return error;
 }
 
+
+
+
+
+#define MAX_CUSTOM_COMMAND_VAR_LEN 1000
+#define MAX_CUSTOM_COMMAND_LEN     2000
+#define MAX_CUSTOM_COMMAND_LEN2    2000*2
+
+#define MAX_CUSTOM_COMMAND_VARS 5
+
+
 char* get_ansi_color_code(char* color_name){
   if(color_name!=nullptr){
     if(strcmp(color_name, "black")==0)
@@ -5640,6 +5656,42 @@ char* get_ansi_color_code(char* color_name){
   }
   /* read as default*/
   return my_strdup(PSI_NOT_INSTRUMENTED, "\001\e[0;31;1m\002", MYF(MY_WME));
+}
+
+void warning_innodb_adaptive_hash_index(){
+  if (!status.batch) {
+    int error;
+    const char *query = "SHOW GLOBAL VARIABLES LIKE 'innodb_adaptive_hash_index'";
+    MYSQL_RES *result;
+    MYSQL_ROW row;
+    if(!connected && reconnect()){
+      return;
+    }
+    if((error = mysql_real_query_for_lazy(query, (int)strlen(query))) || (error = mysql_store_result_for_lazy(&result))){
+      // ignore error
+      return;
+    }
+
+    if(result){
+      unsigned int num_fields = mysql_num_fields(result);
+      uint64_t num_rows = mysql_num_rows(result);
+      if(num_fields==2 && num_rows==1){
+        if((row = mysql_fetch_row(result))){
+          char* var_value = row[1];
+          unsigned long *lengths = mysql_fetch_lengths(result);
+          if(lengths[1]>=2 && (var_value[0]=='O' || var_value[0]=='o') && (var_value[1]=='N' || var_value[1]=='n')){
+            char message[MAX_CUSTOM_COMMAND_LEN2];
+            snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "\n******************************************************************************\n** %sWARNING%s                                                                  **\n******************************************************************************\n** %sConfigured \"innodb_adaptive_hash_index=ON\"%s                               **\n** %sBecareful when you run ALTER TABLE command%s                               **\n******************************************************************************\n", 
+                  (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */), RESET_PROMPT_COLOR_CODE,
+                  (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */), RESET_PROMPT_COLOR_CODE,
+                  (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */), RESET_PROMPT_COLOR_CODE);
+            put_info(message, INFO_INFO);
+          }
+        }
+      }
+      mysql_free_result(result);
+    }
+  }
 }
 
 void resolve_aurora_version(){
@@ -5698,12 +5750,6 @@ void resolve_aurora_hostname_and_role(){
     remote_real_replrole = my_strdup(PSI_NOT_INSTRUMENTED, "unknown-role", MYF(MY_WME));
   }
 }
-
-#define MAX_CUSTOM_COMMAND_VAR_LEN 1000
-#define MAX_CUSTOM_COMMAND_LEN     2000
-#define MAX_CUSTOM_COMMAND_LEN2    2000*2
-
-#define MAX_CUSTOM_COMMAND_VARS 5
 
 /**
  * Remove trailing space & determine delimiter type
