@@ -1,8 +1,8 @@
 # MySQL Rich Client
-\
-\
+&nbsp;
+&nbsp;
 ## Command Line Interface Prompt Change
-\
+&nbsp;
 ### Prompt for Aurora MySQL (`~/.my.cnf`)
 ```
 ## \\X : Aurora Hostname + Region(abbr)
@@ -30,8 +30,8 @@ prompt_color_replica=blue
 
 ![Primary prompt](./images/prompt-primary.png)
 ![Replica prompt](./images/prompt-replica.png)
-\
-\
+&nbsp;
+&nbsp;
 ## Error Message Color
 `error_code_color` 는 별도로 설정되지 않으면, `red`로 초기 설정된다.
 ```
@@ -39,16 +39,16 @@ prompt_color_replica=blue
 error_code_color=red
 ```
 ![Error Message Color](./images/error-color.png)
-\
-\
+&nbsp;
+&nbsp;
 ## Warning for AdaptiveHashIndex
 MySQL 서버의 `innodb_adpative_hash_index` 시스템 변수가 `on`으로 설정되어 있는 경우, 로그인시에 경고 메시지 출력한다.
 ![Warning for InnoDB Adaptive Hash Index](./images/warning-innodb-adaptive-hash-index.png)
-\
-\
+&nbsp;
+&nbsp;
 ## Run SQL File
 MySQL prompt에서 지정된 Prefix (`.`)를 사용하면, 등록된 단축 명령을 실행할 수 있다.
-\
+&nbsp;
 ### 단축 명령 등록
 `~/.mysqlrc/` 디렉토리에 `.sql` 확장자를 가진 SQL 파일 생성한다.
 SQL 파일은 반드시 아래 규칙을 준수해야 한다.
@@ -89,7 +89,7 @@ ORDER BY tx.trx_started ASC;
 #### 단축 명령 네이밍 규칙
 * `객체 + 오퍼레이션`의 조합 형태로 단축어 생성(e.g. `"TABLE LIST" => tl.sql`, `"TABLE CREATE" => t.sql`)
 * 더 자세한 명령 또는 Argument가 필요한 복잡한 명령에는 `+` 표시 사용 (e.g. `"SHOW PROCESSLIST" => ps.sql`, `"SHOW FULL PROCESSLIST" => ps+.sql`)
-\
+&nbsp;
 ### 단축 명령 목록 조회
 등록된 단축 명령 목록은 지정된 Prefix `.`만 입력하거나, 또는 `.?`를 입력하면 된다.
 
@@ -139,7 +139,7 @@ admin@prod-dba-main-0.KR(Replica):[(none)] 06:32:18> .? table
     ----------------------------------------------
     => 3 custom commands found
 ```
-\
+&nbsp;
 ### 단축 명령 사용
 등록된 단축 명령 실행은, 
 아래와 예시와 같이 지정된 Prefix인 `.`과 SQL 파일명 (확장자 제외)을 공백없이 입력하면 된다.
@@ -164,7 +164,7 @@ admin@prod-dba-main-0.KR(Replica):[(none)] 06:29:25> .dl
 | test               |     10 | 3.907852172850 | 0.000000000000 |
 +--------------------+--------+----------------+----------------+
 ```
-\
+&nbsp;
 ### 단축 명령 사용 (with Argument)
 Argument를 필요로 하는 SQL 파일의 실행은 2가지 방법으로 실행할 수 있다.
 
