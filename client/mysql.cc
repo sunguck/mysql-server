@@ -6042,6 +6042,8 @@ static int com_custom_command(String *buffer MY_ATTRIBUTE((unused)), char *line)
     int read_bytes = 0;
     char line_buffer[MAX_CUSTOM_COMMAND_LEN2];
     int arguments_used=0;
+
+    put_info("     ----------------------------------------------------------------------", INFO_INFO);
     while(!script_file.eof()){
       memset(line_buffer, 0, MAX_CUSTOM_COMMAND_LEN2);
       /* read only MAX_CUSTOM_COMMAND_LEN (not MAX_CUSTOM_COMMAND_LEN2), MAX_CUSTOM_COMMAND_LEN2 is for after variable value binded */
@@ -6062,8 +6064,8 @@ static int com_custom_command(String *buffer MY_ATTRIBUTE((unused)), char *line)
         goto stop;
       }
 
-      // Debug printing
-      snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "    => %s", line_buffer);
+      // print query
+      snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "     %s", line_buffer);
       put_info(message, INFO_INFO);
 
       if(glob_buffer.length()>0){
@@ -6072,6 +6074,7 @@ static int com_custom_command(String *buffer MY_ATTRIBUTE((unused)), char *line)
       glob_buffer.append(line_buffer, strlen(line_buffer));
       line_no++;
     }
+    put_info("     ----------------------------------------------------------------------", INFO_INFO);
 
     if(!delimiter_type){
       glob_buffer.append(STRING_WITH_LEN(";"));
