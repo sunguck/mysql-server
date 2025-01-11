@@ -1,0 +1,2 @@
+## [Show Variable] 시스템 변수 조회 - ARGS( ${VARIABLE_NAME} )
+SHOW GLOBAL VARIABLES LIKE '%${VARIABLE_NAME}%';

@@ -209,3 +209,6 @@ Create Table: CREATE TABLE `t1` (
 1 row in set (0.00 sec)
 ```
 
+&nbsp;
+### 단축 명령 목록
+단축 명령의 자세한 예제들은 [client/mysqlrc 디렉토리](https://github.com/sunguck/mysql-server/tree/matt/mysql-rich-client-8.0.40/client) 참고
