@@ -5759,11 +5759,10 @@ void resolve_aurora_hostname_and_role(){
 
 /**
  * Remove trailing space & determine delimiter type
- * RETURN : 0 : No delimiter
- *          1 : Horizontal delimiter (;)
- *          2 : Vertical delimiter (\G)
+ * RETURN : false : Horizontal delimiter (;)
+ *          true  : Vertical delimiter (\G)
  */
-int normalize_custom_command(char* str, int len){
+bool normalize_custom_command(char* str, int len){
   char* end = str + len - 1;
   /* sometimes, ifstream.gcount() tell bigger than real string length, so remove trailing space character */
   while(end>str && (*end=='\0' || my_isspace(charset_info, *end))){
@@ -5772,13 +5771,13 @@ int normalize_custom_command(char* str, int len){
   }
 
   if(*end==';'){
-    return 1; // horizontal
+    *end='\0';
+    return false; // horizontal
   }else if(*end=='G' && --end>=str && *end=='\\'){
-    *end++ = ';';
-    *end = '\0';
-    return 2; // vertical
+    *end='\0';
+    return true; // vertical
   }
-  return 0; // No delimiter
+  return false; // No delimiter == horizontal
 }
 
 /**
@@ -5990,7 +5989,7 @@ static int com_custom_command(String *buffer MY_ATTRIBUTE((unused)), char *line)
   int arguments_in_cmdline=0;
   char* arguments[MAX_CUSTOM_COMMAND_VARS] = {NULL, NULL, NULL, NULL, NULL};
 
-  int delimiter_type = 0; // 0:none, 1(;):horizontal, 2(\G):vertical
+  bool vertical_mode = false;
   char* cmd_line = my_strdup(PSI_NOT_INSTRUMENTED, line, MYF(MY_WME));
   char* tmp_cmd_line = nullptr;
   char* token = nullptr;
@@ -6055,7 +6054,7 @@ static int com_custom_command(String *buffer MY_ATTRIBUTE((unused)), char *line)
         continue;
       }
 
-      delimiter_type = normalize_custom_command(line_buffer, read_bytes);
+      vertical_mode = normalize_custom_command(line_buffer, read_bytes);
       int rtn = bind_variables(line_buffer, MAX_CUSTOM_COMMAND_LEN2, arguments, &arguments_used);
       if(rtn){
         glob_buffer.length(0);
@@ -6076,19 +6075,20 @@ static int com_custom_command(String *buffer MY_ATTRIBUTE((unused)), char *line)
     }
     put_info("     ----------------------------------------------------------------------", INFO_INFO);
 
-    if(!delimiter_type){
-      glob_buffer.append(STRING_WITH_LEN(";"));
-    }
     script_file.close();
 
     // OK
     int rtn=0;
     if(glob_buffer.length()>0){
-      if(delimiter_type==2) // vertical
+      status.add_to_history = false;
+      if(vertical_mode){
         rtn = com_ego(&glob_buffer, nullptr);
-      else
+      }else{
         rtn = com_go(&glob_buffer, nullptr);
+      }
+      status.add_to_history = true;
     }
+
     // Need special care for change database
     if(!rtn && !strcmp("c", custom_command)){
       if(current_db) my_free(current_db);
