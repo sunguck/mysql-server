@@ -5719,10 +5719,10 @@ void warning_cross_region_replication(){
     }
 
     // replica 존재 여부 체크
-    bool has_replica = false;
+    bool is_replica = false;
     if(result){
         uint64_t num_rows = mysql_num_rows(result);
-        has_replica = (num_rows > 0);
+        is_replica = (num_rows > 0);
         mysql_free_result(result);
     }
     
@@ -5744,7 +5744,7 @@ void warning_cross_region_replication(){
                 unsigned long *lengths = mysql_fetch_lengths(result);
                 
                 // read_only가 'OFF'이고 replica가 있는 경우 경고
-                if(has_replica && lengths[1]>=3 && 
+                if(is_replica && lengths[1]>=3 && 
                    (var_value[0]=='O' || var_value[0]=='o') && 
                    (var_value[1]=='F' || var_value[1]=='f') && 
                    (var_value[2]=='F' || var_value[2]=='f')){
