@@ -1230,8 +1230,8 @@ static void window_resize(int);
 char* get_ansi_color_code(char* color_name);
 void resolve_aurora_version();
 void resolve_aurora_hostname_and_role();
-
 void warning_innodb_adaptive_hash_index();
+void warning_cross_region_replication();
 
 const char DELIMITER_NAME[] = "delimiter";
 const uint DELIMITER_NAME_LEN = sizeof(DELIMITER_NAME) - 1;
@@ -1498,7 +1498,10 @@ int main(int argc, char *argv[]) {
 
   /* check innodb adaptive hash index warning */
   warning_innodb_adaptive_hash_index();
-
+	
+  /* check cross-region replication warning */
+  warning_cross_region_replication();
+	
   sprintf(
       buff, "%s",
       "Type 'help;' or '\\h' for help. Type '\\c' to clear the current input "
@@ -5699,6 +5702,79 @@ void warning_innodb_adaptive_hash_index(){
     }
   }
 }
+
+void warning_cross_region_replication(){
+  if (!status.batch) {
+    int error;
+    const char *query1 = "show replica status";
+    const char *query2 = "show global variables like 'read_only'";
+
+    MYSQL_RES *result;
+    MYSQL_ROW row;
+
+    if((error = mysql_real_query_for_lazy(query1, strlen(query1))) || 
+     (error = mysql_store_result_for_lazy(&result))){
+      // ignore error
+      return;
+    }
+
+    // replica 존재 여부 체크
+    bool has_replica = false;
+    if(result){
+        uint64_t num_rows = mysql_num_rows(result);
+        has_replica = (num_rows > 0);
+        mysql_free_result(result);
+    }
+    
+    // 2. read_only 설정 확인
+    if((error = mysql_real_query_for_lazy(query2, strlen(query2))) || 
+       (error = mysql_store_result_for_lazy(&result))){
+        // ignore error
+        return;
+    }
+    
+    if(result){
+        unsigned int num_fields = mysql_num_fields(result); 
+        uint64_t num_rows = mysql_num_rows(result);
+        
+        // read_only 설정값 확인
+        if(num_fields==2 && num_rows==1){
+            if((row = mysql_fetch_row(result))){
+                char* var_value = row[1];
+                unsigned long *lengths = mysql_fetch_lengths(result);
+                
+                // read_only가 'OFF'이고 replica가 있는 경우 경고
+                if(has_replica && lengths[1]>=3 && 
+                   (var_value[0]=='O' || var_value[0]=='o') && 
+                   (var_value[1]=='F' || var_value[1]=='f') && 
+                   (var_value[2]=='F' || var_value[2]=='f')){
+                    
+                    // 경고 메시지 생성
+                    char message[MAX_CUSTOM_COMMAND_LEN2];
+                    snprintf(message, MAX_CUSTOM_COMMAND_LEN2, 
+                        "******************************************************************************\n"
+                        "** %sWARNING%s                                                                 **\n"
+                        "******************************************************************************\n"
+                        "** %sThis cluster is a slave in cross-region replication. %s                   **\n"
+                        "** %sDo not write data or run ALTER TABLE here. %s                             **\n"
+                        "******************************************************************************\n",
+                        (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */), 
+                        RESET_PROMPT_COLOR_CODE,
+                        (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */), 
+                        RESET_PROMPT_COLOR_CODE,
+                        (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */), 
+                        RESET_PROMPT_COLOR_CODE);
+                    
+                    put_info(message, INFO_INFO);
+                }
+            }
+        }
+        mysql_free_result(result);
+    }
+  }
+}
+
+
 
 void resolve_aurora_version(){
   MYSQL_RES *rs = nullptr;
