@@ -1,0 +1,3 @@
+## [Optimizer Trace] 옵티마이저 트레이스 시작
+SET OPTIMIZER_TRACE="enabled=on",END_MARKERS_IN_JSON=on,OPTIMIZER_TRACE_MAX_MEM_SIZE=10000000;
+
