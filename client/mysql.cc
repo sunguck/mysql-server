@@ -314,6 +314,9 @@ static char *current_prompt_color_replica_code = nullptr;
 static char *current_error_color = nullptr;
 static char *current_error_color_code = nullptr;
 
+/* is replica of corss-region replication */
+static bool is_crossregion_replica = false;
+
 /* reset prompt color */
 #define RESET_PROMPT_COLOR_CODE "\001\e[0m\002"
 
@@ -1232,6 +1235,7 @@ void resolve_aurora_version();
 void resolve_aurora_hostname_and_role();
 void warning_innodb_adaptive_hash_index();
 void warning_cross_region_replication();
+int is_ddl_or_dml_statement(const char *buf, size_t length);
 
 const char DELIMITER_NAME[] = "delimiter";
 const uint DELIMITER_NAME_LEN = sizeof(DELIMITER_NAME) - 1;
@@ -1498,10 +1502,10 @@ int main(int argc, char *argv[]) {
 
   /* check innodb adaptive hash index warning */
   warning_innodb_adaptive_hash_index();
-	
+
   /* check cross-region replication warning */
   warning_cross_region_replication();
-	
+
   sprintf(
       buff, "%s",
       "Type 'help;' or '\\h' for help. Type '\\c' to clear the current input "
@@ -3432,6 +3436,20 @@ static int com_go(String *buffer, char *line [[maybe_unused]]) {
                                     4, (const uchar *)"SET ", 4))) {
     (void)put_info("Ignoring query to other database", INFO_INFO);
     return 0;
+  }
+
+  if(is_crossregion_replica){
+    /* Check if DML or DDL statement, if so stop executing */
+    int rtn = is_ddl_or_dml_statement(buffer->ptr(), buffer->length());
+    if(rtn){
+      init_pager();
+      if(rtn==-1){ // Parsing ERROR
+        tee_fprintf(PAGER, "ERROR (Code 00000): Statement parsing error - statement type must be less than 20 characters\n");
+      }else{ // DML or DDL, stop executing
+        tee_fprintf(PAGER, "ERROR (Code 00000): DML and DDL operations are prohibited on the cross-region replica server\n");
+      }
+      goto end;
+    }
   }
 
   timer = start_timer();
@@ -5534,7 +5552,7 @@ static const char *construct_prompt() {
   }
 
   /* end prompt color */
-  if(need_to_reset_color){   
+  if(need_to_reset_color){
     processed_prompt.append(RESET_PROMPT_COLOR_CODE);
     processed_prompt.append(" "); // Required at least 1 characters after RESET COLOR, so print space character after RESET COLOR CODE
   }
@@ -5713,7 +5731,7 @@ void warning_cross_region_replication(){
     MYSQL_RES *result;
     MYSQL_ROW row;
 
-    if((error = mysql_real_query_for_lazy(query1, strlen(query1))) || 
+    if((error = mysql_real_query_for_lazy(query1, strlen(query1))) ||
      (error = mysql_store_result_for_lazy(&result))){
       // ignore error
       return;
@@ -5726,7 +5744,7 @@ void warning_cross_region_replication(){
     if(result){
         uint64_t num_rows = mysql_num_rows(result);
         is_replica = (num_rows > 0);
-        
+
         if(is_replica) {
             row = mysql_fetch_row(result);
             if(row) {
@@ -5736,44 +5754,45 @@ void warning_cross_region_replication(){
         }
         mysql_free_result(result);
     }
-    
+
     // 2. read_only 설정 확인
-    if((error = mysql_real_query_for_lazy(query2, strlen(query2))) || 
+    if((error = mysql_real_query_for_lazy(query2, strlen(query2))) ||
        (error = mysql_store_result_for_lazy(&result))){
         // ignore error
         return;
     }
-    
+
     if(result){
-        unsigned int num_fields = mysql_num_fields(result); 
+        unsigned int num_fields = mysql_num_fields(result);
         uint64_t num_rows = mysql_num_rows(result);
-        
+
         // read_only 설정값 확인
         if(num_fields==2 && num_rows==1){
             if((row = mysql_fetch_row(result))){
                 char* var_value = row[1];
                 unsigned long *lengths = mysql_fetch_lengths(result);
-                
+
                 // read_only가 'OFF'이고 replica가 있는 경우 경고
                 if(is_replica && lengths[1]>=2 && is_io_thread_running && is_sql_thread_running &&
-                   (var_value[0]=='O' || var_value[0]=='o') && 
-                   (var_value[1]=='N' || var_value[1]=='n')){ 
+                   (var_value[0]=='O' || var_value[0]=='o') &&
+                   (var_value[1]=='N' || var_value[1]=='n')){
+                    is_crossregion_replica = true;
                     // 경고 메시지 생성
                     char message[MAX_CUSTOM_COMMAND_LEN2];
-                    snprintf(message, MAX_CUSTOM_COMMAND_LEN2, 
+                    snprintf(message, MAX_CUSTOM_COMMAND_LEN2,
                         "******************************************************************************\n"
                         "** %sWARNING%s                                                                 **\n"
                         "******************************************************************************\n"
                         "** %sThis cluster is a slave in cross-region replication. %s                   **\n"
                         "** %sDo not write data or run ALTER TABLE here. %s                             **\n"
                         "******************************************************************************\n",
-                        (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */), 
+                        (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */),
                         RESET_PROMPT_COLOR_CODE,
-                        (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */), 
+                        (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */),
                         RESET_PROMPT_COLOR_CODE,
-                        (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */), 
+                        (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */),
                         RESET_PROMPT_COLOR_CODE);
-                    
+
                     put_info(message, INFO_INFO);
                 }
             }
@@ -5932,7 +5951,7 @@ int bind_variables(char* buffer, int buffer_len, char** arguments, int* argument
     char* tmp_var_name = var_name;
     while(source_start_ptr<var_end_ptr && tmp_var_name<(var_name+MAX_CUSTOM_COMMAND_VAR_LEN-1)) *tmp_var_name++=*source_start_ptr++;
     *tmp_var_name='\0';
-    source_start_ptr += 1; // Skip "}" 
+    source_start_ptr += 1; // Skip "}"
 
     char* var_value = nullptr;
     char* prompt_value = nullptr;
@@ -6010,7 +6029,7 @@ void help_custom_command(char* filter/* for help message filtering */){
     return;
   }
 
-  put_info("    ----------------------------------------------", INFO_INFO); 
+  put_info("    ----------------------------------------------", INFO_INFO);
 
   int total_commands = 0;
   char help_format[100];
@@ -6050,14 +6069,14 @@ void help_custom_command(char* filter/* for help message filtering */){
           put_info(message, INFO_INFO);
         }
   }
-  put_info("    ----------------------------------------------", INFO_INFO); 
+  put_info("    ----------------------------------------------", INFO_INFO);
 
   if(filter!=NULL && filter[0]!='\0'){
     snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "    => %d custom commands found (filtered : %s)", total_commands, filter);
   }else{
     snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "    => %d custom commands found", total_commands);
   }
-  put_info(message, INFO_INFO); 
+  put_info(message, INFO_INFO);
 }
 
 
@@ -6101,9 +6120,9 @@ static int com_custom_command(String *buffer MY_ATTRIBUTE((unused)), char *line)
   }
 
   // Debug printing
-  snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "  => Command=[%s], Arg1=[%s] Arg2=[%s] Arg3=[%s] Arg4=[%s] Arg5=[%s]", custom_command, 
-          (arguments[0]==nullptr ? "" : arguments[0]), (arguments[1]==nullptr ? "" : arguments[1]), 
-          (arguments[2]==nullptr ? "" : arguments[2]), (arguments[3]==nullptr ? "" : arguments[3]), 
+  snprintf(message, MAX_CUSTOM_COMMAND_LEN2, "  => Command=[%s], Arg1=[%s] Arg2=[%s] Arg3=[%s] Arg4=[%s] Arg5=[%s]", custom_command,
+          (arguments[0]==nullptr ? "" : arguments[0]), (arguments[1]==nullptr ? "" : arguments[1]),
+          (arguments[2]==nullptr ? "" : arguments[2]), (arguments[3]==nullptr ? "" : arguments[3]),
           (arguments[4]==nullptr ? "" : arguments[4]));
   put_info(message, INFO_INFO);
 
@@ -6197,4 +6216,44 @@ stop:
     if(arguments[idx]) free(arguments[idx]); // free() when argument is readed by readline(), not commandline buffer
   }
   return 0; // Never Failed
+}
+
+int is_ddl_or_dml_statement(const char *buf, size_t length) {
+    char cleaned_sql[20] = {0};
+    size_t j = 0;
+
+    for (size_t i = 0; i < length; i++) {
+        if (buf[i] == '-' && buf[i + 1] == '-') {
+            while (i < length && buf[i] != '\n') i++;
+        } else if (buf[i] == '/' && buf[i + 1] == '*') {
+            i += 2;
+            while (i < length && !(buf[i] == '*' && buf[i + 1] == '/')) i++;
+            i++;
+        } else {
+            /* DML & DDL statement type must be less than 20 characters */
+            if(j>=20) return -1;
+
+            /* Strip preceding space and tab and newline characters */
+            if(j==0 && ((buf[i]=='\t' || buf[i]=='\n' || buf[i]=='\r' || buf[i]==' '))) continue;
+            cleaned_sql[j++] = buf[i];
+            if (j>0 && (buf[i]=='\t' || buf[i]=='\n' || buf[i]=='\r' || buf[i]==' ')) {
+                break;
+            }
+        }
+    }
+    cleaned_sql[j] = '\0';
+
+    // 첫 번째 토큰 추출
+    char *token = strtok(cleaned_sql, " \t\n\r");
+    if (token) {
+        // CREATE, ALTER, INSERT, UPDATE, DELETE, REPLACE 중 하나인지 확인
+        if (strcasecmp(token, "CREATE") == 0 || strcasecmp(token, "ALTER") == 0 ||
+            strcasecmp(token, "TRUNCATE") == 0 || strcasecmp(token, "DROP") == 0 ||
+            strcasecmp(token, "INSERT") == 0 || strcasecmp(token, "UPDATE") == 0 ||
+            strcasecmp(token, "DELETE") == 0 || strcasecmp(token, "REPLACE") == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
 }
