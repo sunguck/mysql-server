@@ -5703,6 +5703,7 @@ void warning_innodb_adaptive_hash_index(){
   }
 }
 
+
 void warning_cross_region_replication(){
   if (!status.batch) {
     int error;
@@ -5718,11 +5719,21 @@ void warning_cross_region_replication(){
       return;
     }
 
-    // replica 존재 여부 체크
+    // replica 존재 여부와 복제 상태 체크
     bool is_replica = false;
+    bool is_io_thread_running = false;
+    bool is_sql_thread_running = false;
     if(result){
         uint64_t num_rows = mysql_num_rows(result);
         is_replica = (num_rows > 0);
+        
+        if(is_replica) {
+            row = mysql_fetch_row(result);
+            if(row) {
+                is_io_thread_running = (row[10] && strcmp(row[10], "Yes") == 0);  // Replica_IO_Running
+                is_sql_thread_running = (row[11] && strcmp(row[11], "Yes") == 0);  // Replica_SQL_Running
+            }
+        }
         mysql_free_result(result);
     }
     
@@ -5744,11 +5755,9 @@ void warning_cross_region_replication(){
                 unsigned long *lengths = mysql_fetch_lengths(result);
                 
                 // read_only가 'OFF'이고 replica가 있는 경우 경고
-                if(is_replica && lengths[1]>=3 && 
+                if(is_replica && lengths[1]>=2 && is_io_thread_running && is_sql_thread_running &&
                    (var_value[0]=='O' || var_value[0]=='o') && 
-                   (var_value[1]=='F' || var_value[1]=='f') && 
-                   (var_value[2]=='F' || var_value[2]=='f')){
-                    
+                   (var_value[1]=='N' || var_value[1]=='n')){ 
                     // 경고 메시지 생성
                     char message[MAX_CUSTOM_COMMAND_LEN2];
                     snprintf(message, MAX_CUSTOM_COMMAND_LEN2, 
@@ -5773,8 +5782,6 @@ void warning_cross_region_replication(){
     }
   }
 }
-
-
 
 void resolve_aurora_version(){
   MYSQL_RES *rs = nullptr;
