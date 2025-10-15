@@ -5733,6 +5733,22 @@ void warning_cross_region_replication(){
 
     if((error = mysql_real_query_for_lazy(query1, strlen(query1))) ||
      (error = mysql_store_result_for_lazy(&result))){
+      char message[MAX_CUSTOM_COMMAND_LEN2];
+      snprintf(message, MAX_CUSTOM_COMMAND_LEN2,
+          "******************************************************************************\n"
+          "** %sWARNING%s                                                                 **\n"
+          "******************************************************************************\n"
+          "** %sFailed to run SHOW REPLICA STATUS to investigate cross-region replica.%s  **\n"
+          "** %sIt appears that you may not have sufficient privileges.%s                 **\n"
+          "******************************************************************************\n",
+          (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */),
+          RESET_PROMPT_COLOR_CODE,
+          (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */),
+          RESET_PROMPT_COLOR_CODE,
+          (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */),
+          RESET_PROMPT_COLOR_CODE);
+      put_info(message, INFO_INFO);
+
       // ignore error
       return;
     }
@@ -5783,7 +5799,7 @@ void warning_cross_region_replication(){
                         "******************************************************************************\n"
                         "** %sWARNING%s                                                                 **\n"
                         "******************************************************************************\n"
-                        "** %sThis cluster is a slave in cross-region replication. %s                   **\n"
+                        "** %sThis cluster is a replica in cross-region replication. %s                 **\n"
                         "** %sDo not write data or run ALTER TABLE here. %s                             **\n"
                         "******************************************************************************\n",
                         (current_error_color_code ? current_error_color_code:"\001\e[0;31;1m\002"/* red */),
